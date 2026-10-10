@@ -14,198 +14,136 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const sourceSockets = new Map();
 const clientSockets = new Map();
-const connections = new Map();
+const relayMap = new Map();
 
 app.use(express.json());
 
 app.get('/', (req, res) => {
   res.json({
-    name: 'Test Relay Server',
+    name: 'Testt Relay Server',
     status: 'ok',
-    version: '1.0.0',
-    description: 'Relay server for source-client internet sharing demo',
-    stats: {
-      sources: sourceSockets.size,
-      clients: clientSockets.size,
-      activeConnections: connections.size
-    }
+    version: '2.0.0',
+    roles: ['source', 'client'],
+    endpoints: ['/health', '/stats']
   });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: process.uptime() });
 });
 
 app.get('/stats', (req, res) => {
   res.json({
     sources: sourceSockets.size,
     clients: clientSockets.size,
-    activeConnections: connections.size,
+    activeRelays: relayMap.size,
     timestamp: new Date().toISOString()
   });
 });
 
-function matchClientWithSource() {
-  if (sourceSockets.size === 0 || clientSockets.size === 0) {
-    return;
-  }
+function matchRelay() {
+  if (sourceSockets.size === 0 || clientSockets.size === 0) return;
 
-  const sourceEntries = Array.from(sourceSockets.entries());
-  const clientEntries = Array.from(clientSockets.entries());
+  const sourceEntry = Array.from(sourceSockets.entries())[0];
+  const clientEntry = Array.from(clientSockets.entries())[0];
 
-  // Try to match first available source with first available client
-  const [sourceId, sourceInfo] = sourceEntries[0];
-  const [clientId, clientInfo] = clientEntries[0];
+  if (!sourceEntry || !clientEntry) return;
 
-  if (!sourceInfo || !clientInfo) {
-    return;
-  }
+  const [sourceId, sourceInfo] = sourceEntry;
+  const [clientId, clientInfo] = clientEntry;
 
-  const sourceSocket = sourceInfo.socket;
-  const clientSocket = clientInfo.socket;
-
-  // Notify source about relay request
-  sourceSocket.emit('relayRequest', {
+  sourceInfo.socket.emit('relayRequest', {
     from: clientId,
-    message: 'A client is asking for internet relay.'
+    message: 'A client is requesting internet relay.'
   });
 
-  // Notify client that relay is ready
-  clientSocket.emit('status', {
+  clientInfo.socket.emit('status', {
     type: 'relay-ready',
     message: 'Waiting for source approval...',
     sourceId
   });
 
-  console.log(`Matched: source=${sourceId} <-> client=${clientId}`);
+  sourceInfo.socket.emit('status', {
+    type: 'relay-ready',
+    message: 'A client is ready to connect.',
+    clientId
+  });
 }
 
 io.on('connection', (socket) => {
-  console.log('Device connected:', socket.id);
+  console.log('Connected:', socket.id);
 
-  socket.on('registerSource', () => {
-    sourceSockets.set(socket.id, { socket });
-    socket.emit('status', {
-      type: 'source-registered',
-      message: 'Registered as source. Waiting for client...'
-    });
-    console.log('Source registered:', socket.id);
-    matchClientWithSource();
+  socket.on('registerSource', (metadata = {}) => {
+    sourceSockets.set(socket.id, { socket, metadata });
+    socket.emit('status', { type: 'source-registered', message: 'Source registered.' });
+    matchRelay();
   });
 
-  socket.on('registerClient', () => {
-    clientSockets.set(socket.id, { socket });
-    socket.emit('status', {
-      type: 'client-registered',
-      message: 'Registered as client. Waiting for source...'
-    });
-    console.log('Client registered:', socket.id);
-    matchClientWithSource();
+  socket.on('registerClient', (metadata = {}) => {
+    clientSockets.set(socket.id, { socket, metadata });
+    socket.emit('status', { type: 'client-registered', message: 'Client registered.' });
+    matchRelay();
   });
 
   socket.on('acceptRelay', (payload = {}) => {
     const { sourceId, clientId } = payload;
+    if (!sourceId || !clientId) return;
 
-    if (!sourceId || !clientId) {
-      return;
-    }
+    const s = io.sockets.sockets.get(sourceId);
+    const c = io.sockets.sockets.get(clientId);
 
-    const sourceSocket = io.sockets.sockets.get(sourceId);
-    const clientSocket = io.sockets.sockets.get(clientId);
+    if (!s || !c) return;
 
-    if (sourceSocket && clientSocket) {
-      // Create connection mapping
-      connections.set(`${sourceId}-${clientId}`, {
-        source: sourceId,
-        client: clientId,
-        createdAt: new Date()
-      });
+    const relayKey = `${sourceId}:${clientId}`;
+    relayMap.set(relayKey, { sourceId, clientId, createdAt: Date.now() });
 
-      // Notify both devices
-      sourceSocket.emit('status', {
-        type: 'relay-accepted',
-        message: 'Relay approved. Connected to client.',
-        clientId
-      });
+    s.emit('connectedPeer', { peerId: clientId, type: 'client' });
+    c.emit('connectedPeer', { peerId: sourceId, type: 'source' });
 
-      clientSocket.emit('status', {
-        type: 'relay-accepted',
-        message: 'Source approved. Relay active.',
-        sourceId
-      });
-
-      // Send peer info
-      sourceSocket.emit('connectedPeer', {
-        peerId: clientId,
-        type: 'client'
-      });
-
-      clientSocket.emit('connectedPeer', {
-        peerId: sourceId,
-        type: 'source'
-      });
-
-      console.log(`Relay active: source=${sourceId} <-> client=${clientId}`);
-    }
+    s.emit('status', { type: 'relay-accepted', message: 'Relay approved.', clientId });
+    c.emit('status', { type: 'relay-accepted', message: 'Relay approved by source.', sourceId });
   });
 
-  socket.on('sendData', (payload = {}) => {
+  socket.on('packet', (payload = {}) => {
     const { target, data } = payload;
-
     if (!target) {
-      socket.emit('status', {
-        type: 'error',
-        message: 'No target specified.'
-      });
+      socket.emit('status', { type: 'error', message: 'Target not specified.' });
       return;
     }
 
     const targetSocket = io.sockets.sockets.get(target);
-    if (targetSocket) {
-      targetSocket.emit('data', {
-        from: socket.id,
-        payload: data || payload,
-        timestamp: new Date().toISOString()
-      });
-    } else {
-      socket.emit('status', {
-        type: 'error',
-        message: 'Target peer not found.'
-      });
+    if (!targetSocket) {
+      socket.emit('status', { type: 'error', message: 'Target peer not available.' });
+      return;
     }
+
+    targetSocket.emit('packet', {
+      from: socket.id,
+      data,
+      receivedAt: Date.now()
+    });
   });
 
   socket.on('ping', (payload, callback) => {
     if (typeof callback === 'function') {
-      callback({ 
-        ok: true, 
-        timestamp: Date.now(), 
-        from: socket.id, 
-        payload 
-      });
+      callback({ ok: true, ts: Date.now(), from: socket.id, payload });
     }
   });
 
   socket.on('disconnect', () => {
     sourceSockets.delete(socket.id);
     clientSockets.delete(socket.id);
-    
-    // Clean up connections involving this socket
-    for (const [key, conn] of connections.entries()) {
-      if (conn.source === socket.id || conn.client === socket.id) {
-        connections.delete(key);
+
+    for (const [key, relay] of relayMap.entries()) {
+      if (relay.sourceId === socket.id || relay.clientId === socket.id) {
+        relayMap.delete(key);
       }
     }
-    
-    console.log('Device disconnected:', socket.id);
+
+    console.log('Disconnected:', socket.id);
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`\n🚀 Test Relay Server running on http://localhost:${PORT}`);
-  console.log(`📊 Check stats at http://localhost:${PORT}/stats\n`);
+  console.log(`Relay server running on http://localhost:${PORT}`);
 });

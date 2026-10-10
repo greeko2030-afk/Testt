@@ -1,5 +1,7 @@
 package com.example.test
 
+import android.content.Intent
+import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,7 +29,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -50,225 +51,249 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-}
 
-@Composable
-fun RelayApp() {
-    var serverUrl by remember { mutableStateOf("http://10.0.2.2:3000") }
-    var selectedRole by remember { mutableStateOf("source") }
-    var status by remember { mutableStateOf("Disconnected") }
-    var logText by remember { mutableStateOf("Ready to connect.\n") }
-    var socket by remember { mutableStateOf<Socket?>(null) }
-    var connectedPeer by remember { mutableStateOf("") }
-
-    fun appendLog(text: String) {
-        logText += "[${System.currentTimeMillis() % 10000}] $text\n"
+    private fun prepareVpnServer() {
+        val intent = VpnService.prepare(this)
+        if (intent != null) {
+            startActivity(intent)
+            return
+        }
     }
 
-    fun connectSocket(role: String) {
-        if (socket != null) {
-            socket?.disconnect()
+    @Composable
+    fun RelayApp() {
+        var serverUrl by remember { mutableStateOf("http://10.0.2.2:3000") }
+        var selectedRole by remember { mutableStateOf("source") }
+        var status by remember { mutableStateOf("Disconnected") }
+        var logText by remember { mutableStateOf("Ready.\n") }
+        var socket by remember { mutableStateOf<Socket?>(null) }
+        var connectedPeer by remember { mutableStateOf("") }
+
+        fun appendLog(text: String) {
+            logText += "[$selectedRole] $text\n"
         }
 
-        try {
-            val ioOptions = IO.Options().apply {
-                transports = arrayOf("websocket")
-                reconnection = true
-                reconnectionDelay = 1000
-                timeout = 20000
+        fun startRelayVpn() {
+            prepareVpnServer()
+            val vpnIntent = Intent(this@MainActivity, VpnRelayService::class.java)
+            vpnIntent.putExtra("server_url", serverUrl)
+            vpnIntent.putExtra("role", selectedRole)
+            startService(vpnIntent)
+            appendLog("VPN service started")
+        }
+
+        fun stopRelayVpn() {
+            stopService(Intent(this@MainActivity, VpnRelayService::class.java))
+            appendLog("VPN service stopped")
+            status = "VPN stopped"
+        }
+
+        fun connectSocket(role: String) {
+            if (socket != null) {
+                socket?.disconnect()
             }
 
-            socket = IO.socket(serverUrl, ioOptions)
-
-            socket?.on(Socket.EVENT_CONNECT) {
-                status = "Connected as $role"
-                appendLog("✅ Connected: ${socket?.id()}")
-                if (role == "source") {
-                    socket?.emit("registerSource")
-                } else {
-                    socket?.emit("registerClient")
+            try {
+                val options = IO.Options().apply {
+                    transports = arrayOf("websocket")
+                    reconnection = true
+                    timeout = 20000
                 }
-            }
 
-            socket?.on("status") { args ->
-                val payload = args.firstOrNull() as? JSONObject
-                val message = payload?.optString("message") ?: "No status"
-                val type = payload?.optString("type") ?: "info"
-                status = message
-                appendLog("📡 [$type] $message")
-            }
+                socket = IO.socket(serverUrl, options)
 
-            socket?.on("relayRequest") { args ->
-                val payload = args.firstOrNull() as? JSONObject
-                val from = payload?.optString("from") ?: "unknown"
-                appendLog("📨 Relay request from $from")
-                socket?.emit(
-                    "acceptRelay",
-                    JSONObject().apply {
-                        put("sourceId", socket?.id())
-                        put("clientId", from)
+                socket?.on(Socket.EVENT_CONNECT) {
+                    status = "Connected as $role"
+                    appendLog("Connected to ${serverUrl}")
+                    if (role == "source") {
+                        socket?.emit("registerSource")
+                    } else {
+                        socket?.emit("registerClient")
                     }
-                )
-            }
-
-            socket?.on("data") { args ->
-                val payload = args.firstOrNull() as? JSONObject
-                val from = payload?.optString("from") ?: "unknown"
-                val data = payload?.optString("payload") ?: ""
-                appendLog("📥 Data from $from: $data")
-            }
-
-            socket?.on("connectedPeer") { args ->
-                val payload = args.firstOrNull() as? JSONObject
-                val peerId = payload?.optString("peerId") ?: "unknown"
-                val type = payload?.optString("type") ?: "unknown"
-                connectedPeer = "$peerId ($type)"
-                appendLog("🔗 Connected peer: $peerId")
-            }
-
-            socket?.on(Socket.EVENT_DISCONNECT) {
-                appendLog("❌ Disconnected from server")
-                status = "Disconnected"
-                connectedPeer = ""
-            }
-
-            socket?.on(Socket.EVENT_CONNECT_ERROR) { args ->
-                val error = args.firstOrNull()?.toString() ?: "Unknown error"
-                appendLog("⚠️ Connection error: $error")
-                status = "Connection error"
-            }
-
-            socket?.connect()
-        } catch (e: Exception) {
-            status = "Failed to connect"
-            appendLog("❌ Error: ${e.message}")
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF3F5F9))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF111827))
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "Test Relay App",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Text(
-                    text = "Dhaka ↔ Chattogram Internet Relay Demo",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFFC7D2FE)
-                )
-            }
-        }
-
-        Text(text = "Server URL", fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-            value = serverUrl,
-            onValueChange = { serverUrl = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            label = { Text("http://10.0.2.2:3000 or your IP:3000") }
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Button(
-                onClick = {
-                    selectedRole = "source"
-                    connectSocket("source")
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Source (Dhaka)")
-            }
-
-            Button(
-                onClick = {
-                    selectedRole = "client"
-                    connectSocket("client")
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Client (Chattogram)")
-            }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(text = "Role: $selectedRole", fontWeight = FontWeight.SemiBold)
-                Text(text = "Status: $status", fontSize = MaterialTheme.typography.bodySmall.fontSize)
-                if (connectedPeer.isNotEmpty()) {
-                    Text(text = "Connected Peer: $connectedPeer", fontSize = MaterialTheme.typography.bodySmall.fontSize, color = Color(0xFF059669))
                 }
+
+                socket?.on("status") { args ->
+                    val payload = args.firstOrNull() as? JSONObject
+                    val message = payload?.optString("message") ?: "status update"
+                    status = message
+                    appendLog(message)
+                }
+
+                socket?.on("connectedPeer") { args ->
+                    val payload = args.firstOrNull() as? JSONObject
+                    val peerId = payload?.optString("peerId") ?: "unknown"
+                    val type = payload?.optString("type") ?: "unknown"
+                    connectedPeer = "$peerId ($type)"
+                    appendLog("Connected to peer: $peerId ($type)")
+                }
+
+                socket?.on("packet") { args ->
+                    val payload = args.firstOrNull() as? JSONObject
+                    val from = payload?.optString("from") ?: "unknown"
+                    val data = payload?.optString("data") ?: ""
+                    appendLog("Packet from $from: $data")
+                }
+
+                socket?.on(Socket.EVENT_DISCONNECT) {
+                    appendLog("Disconnected from server")
+                    status = "Disconnected"
+                }
+
+                socket?.on(Socket.EVENT_CONNECT_ERROR) { args ->
+                    val error = args.firstOrNull()?.toString() ?: "Unknown"
+                    appendLog("Connect error: $error")
+                    status = "Connection error"
+                }
+
+                socket?.connect()
+            } catch (e: Exception) {
+                status = "Failed to connect"
+                appendLog("Error: ${e.message}")
             }
         }
-
-        Button(
-            onClick = {
-                val target = socket?.id()
-                if (target != null) {
-                    socket?.emit(
-                        "sendData",
-                        JSONObject().apply {
-                            put("target", target)
-                            put("data", "Test packet from $selectedRole")
-                        }
-                    )
-                    appendLog("📤 Sent test packet")
-                } else {
-                    appendLog("⚠️ No active connection")
-                }
-            },
-            modifier = Modifier.align(Alignment.Start)
-        ) {
-            Text("Send Test Packet")
-        }
-
-        Text(
-            text = "Event Log",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
 
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .background(Color(0xFF101828), shape = RoundedCornerShape(12.dp))
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                .fillMaxSize()
+                .background(Color(0xFFF2F5F9))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = logText,
-                color = Color(0xFFE2E8F0),
-                fontSize = MaterialTheme.typography.bodySmall.fontSize
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF101827))
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Testt Relay VPN",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Production-style relay prototype",
+                        color = Color(0xFFCBD5E1),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            Text(text = "Server URL")
+            OutlinedTextField(
+                value = serverUrl,
+                onValueChange = { serverUrl = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("http://10.0.2.2:3000") }
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = {
+                        selectedRole = "source"
+                        startRelayVpn()
+                        connectSocket("source")
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Source")
+                }
+
+                Button(
+                    onClick = {
+                        selectedRole = "client"
+                        startRelayVpn()
+                        connectSocket("client")
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Client")
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = { startRelayVpn() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Start VPN")
+                }
+
+                Button(
+                    onClick = { stopRelayVpn() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Stop VPN")
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Role: $selectedRole", fontWeight = FontWeight.SemiBold)
+                    Text("Status: $status")
+                    if (connectedPeer.isNotEmpty()) {
+                        Text("Peer: $connectedPeer")
+                    }
+                }
+            }
+
+            Button(
+                onClick = {
+                    val target = socket?.id()
+                    if (target != null) {
+                        socket?.emit(
+                            "packet",
+                            JSONObject().apply {
+                                put("target", target)
+                                put("data", "Test packet from $selectedRole")
+                            }
+                        )
+                        appendLog("Sent test packet")
+                    } else {
+                        appendLog("No active socket")
+                    }
+                }
+            ) {
+                Text("Send Test Packet")
+            }
+
+            Text(
+                text = "Logs",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(260.dp)
+                    .verticalScroll(rememberScrollState())
+                    .background(Color(0xFF101828), RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = logText,
+                    color = Color(0xFFE2E8F0)
+                )
+            }
         }
     }
 }

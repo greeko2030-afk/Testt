@@ -1,17 +1,13 @@
 {
   "name": "test-relay-server",
   "version": "1.0.0",
-  "description": "Simple relay server for demo internet-sharing app",
+  "description": "Secure relay server for remote traffic relay demo",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node index.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.8.1"
-  },
-  "keywords": ["relay", "websocket", "socket.io"],
-  "author": "",
-  "license": "MIT"
+  }
 }

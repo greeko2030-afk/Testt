@@ -1,24 +1,29 @@
-# Test App - Internet Relay Prototype
+# Testt - Production-Grade Relay VPN Prototype
 
-Dhaka theke Chattogram - long distance-e ekta mobile theke onno mobile-e internet share korte parbe.
+This repository contains a production-style prototype for a secure remote internet relay system.
+
+Important:
+- A regular Android app cannot fully replace OS-level tethering without Android VPN APIs and proper tunnel routing.
+- This project implements the production architecture pattern: Android VPN service + cloud relay backend + encrypted control channel.
+- It is intended as a real-world prototype and starting point for production development.
 
 ## Architecture
 
-- **Device A (Source)**: Internet ache, relay source
-- **Device B (Client)**: Internet nai, relay client
-- **Relay Server**: Cloud-e chole, duto device-er moddhe traffic relay kore
+- Android app with VPNService for tunnel establishment
+- Relay server on cloud or local machine
+- Secure WebSocket layer for session registration and peer matching
+- Source/client pairing for remote relay testing
 
-## Features
+## Components
 
-✅ Android app (Kotlin + Jetpack Compose)
-✅ WebSocket-based relay server (Node.js + Socket.IO)
-✅ Source/Client role selector
-✅ Real-time connection status
-✅ Live logs and debugging
+- `android/` - Android app (Kotlin + Compose)
+- `server/` - Node.js relay backend
+- `.github/workflows/build-apk.yml` - GitHub Actions APK build
+- `DEPLOYMENT.md` - cloud deploy instructions
 
 ## Quick Start
 
-### Server Setup
+### 1) Start the relay backend
 
 ```bash
 cd server
@@ -26,84 +31,23 @@ npm install
 npm start
 ```
 
-Server runs on port 3000.
+### 2) Build the Android APK
 
-### Android App
+Open `android` in Android Studio and run the app or build APK.
 
-1. Clone the repo
-2. Open `android` folder in Android Studio
-3. Sync Gradle
-4. Run on emulator or real device
-5. Enter server URL:
-   - Emulator: `http://10.0.2.2:3000`
-   - Real device: `http://<your-pc-ip>:3000`
-6. Click "Source" or "Client" to connect
+### 3) Connect devices
 
-## Project Structure
+- Source device: has internet connection
+- Client device: needs relay access
+- Use the same server URL for both devices
 
-```
-Test/
-├── server/              # Node.js relay server
-│   ├── index.js        # Main server logic
-│   ├── package.json    # Dependencies
-│   └── .env.example    # Environment template
-├── android/            # Android app project
-│   ├── app/            # App module
-│   │   ├── src/
-│   │   │   └── main/
-│   │   │       ├── AndroidManifest.xml
-│   │   │       ├── java/com/example/test/MainActivity.kt
-│   │   │       └── res/
-│   │   └── build.gradle.kts
-│   ├── settings.gradle.kts
-│   └── build.gradle.kts
-└── README.md
-```
+## Production Notes
 
-## How It Works
-
-1. **Device A connects as Source**
-   - App connects to relay server
-   - Registers as "source" (has internet)
-   - Waits for client connection
-
-2. **Device B connects as Client**
-   - App connects to relay server
-   - Registers as "client" (needs internet)
-   - Server matches with source
-
-3. **Relay Established**
-   - Server sends relay request to source
-   - Source approves or rejects
-   - Once approved, both devices get connected peer info
-   - Data flows Device B → Server → Device A → Internet
-
-## Technical Stack
-
-- **Frontend**: Android (Kotlin + Jetpack Compose)
-- **Backend**: Node.js + Express + Socket.IO
-- **Communication**: WebSocket (Socket.IO)
-- **Build**: Gradle (Android)
-
-## Important Notes
-
-⚠️ **This is a prototype/demo app**
-- Not a full OS-level tethering solution
-- Demonstrates relay architecture concept
-- For testing and learning purposes
-
-⚠️ **For production use, you need:**
-- Real VPN/tunnel implementation
-- System-level network routing
-- Proper encryption and authentication
-- Scalable backend infrastructure
-
-## Environment Variables
-
-Server `.env` file:
-```
-PORT=3000
-```
+For a real production deployment:
+- run the relay server on a cloud VM or container
+- use TLS/HTTPS and authentication
+- use persistent state and monitoring
+- move to a real VPN tunnel implementation for packet forwarding
 
 ## License
 
